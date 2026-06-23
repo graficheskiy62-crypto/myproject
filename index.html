@@ -111,17 +111,121 @@
         .camera-container {
             position: relative;
             width: 100%;
-            max-width: 500px;
+            max-width: 640px;
             margin: 0 auto 20px;
             border-radius: 15px;
             overflow: hidden;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            background: #000;
         }
 
+        /* Стили для видео с камеры */
         #webcam-container {
             width: 100%;
-            height: 375px;
+            height: 480px;
+            position: relative;
             background: #000;
+        }
+
+        #webcam-container canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* Индикатор записи камеры */
+        .camera-indicator {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: rgba(220, 38, 38, 0.9);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 10;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .camera-indicator.active {
+            opacity: 1;
+            animation: pulse-record 1.5s ease-in-out infinite;
+        }
+
+        .record-dot {
+            width: 10px;
+            height: 10px;
+            background: white;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        @keyframes pulse-record {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* Рамка для распознавания жестов */
+        .gesture-frame {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 200px;
+            height: 200px;
+            border: 3px dashed rgba(255, 255, 255, 0.6);
+            border-radius: 20px;
+            pointer-events: none;
+            z-index: 5;
+            display: none;
+        }
+
+        .gesture-frame.active {
+            display: block;
+            animation: frame-pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes frame-pulse {
+            0%, 100% { 
+                border-color: rgba(255, 255, 255, 0.6);
+                box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4);
+            }
+            50% { 
+                border-color: rgba(255, 255, 255, 0.9);
+                box-shadow: 0 0 0 10px rgba(255, 255, 255, 0);
+            }
+        }
+
+        /* Индикатор распознавания */
+        .recognition-badge {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: rgba(40, 167, 69, 0.9);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 600;
+            z-index: 10;
+            display: none;
+        }
+
+        .recognition-badge.active {
+            display: block;
+            animation: badge-pulse 0.5s ease-in-out;
+        }
+
+        @keyframes badge-pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
         }
 
         .prediction-info {
@@ -234,6 +338,28 @@
             font-size: 1.1em;
             color: #6c757d;
             margin-top: 10px;
+            font-weight: 600;
+        }
+
+        .timer.urgent {
+            color: #dc3545;
+            animation: urgent-pulse 1s ease-in-out infinite;
+        }
+
+        @keyframes urgent-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Подсказка для игрока */
+        .camera-hint {
+            text-align: center;
+            color: #6c757d;
+            font-size: 0.95em;
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(0,123,255,0.05);
+            border-radius: 8px;
         }
 
         @media (max-width: 768px) {
@@ -254,6 +380,10 @@
                 font-size: 4em;
                 min-height: 120px;
             }
+            
+            #webcam-container {
+                height: 360px;
+            }
         }
     </style>
 </head>
@@ -264,7 +394,17 @@
         <div class="status waiting" id="status">Загрузка модели...</div>
         
         <div class="camera-container">
+            <div class="camera-indicator" id="cameraIndicator">
+                <span class="record-dot"></span>
+                <span>LIVE</span>
+            </div>
+            <div class="recognition-badge" id="recognitionBadge">📸 Распознавание...</div>
+            <div class="gesture-frame" id="gestureFrame"></div>
             <div id="webcam-container"></div>
+        </div>
+        
+        <div class="camera-hint">
+            💡 Покажите жест в центре камеры: ✊ Камень, ✌️ Ножницы, ✋ Бумага
         </div>
         
         <div class="timer" id="timer">Следующий раунд через: 3 сек</div>
@@ -324,6 +464,7 @@
         let gameActive = false;
         let countdownInterval;
         let predictionInterval;
+        let animationFrameId;
         
         // Счёт игры
         let scores = {
@@ -350,14 +491,20 @@
                 model = await tmImage.load(modelURL, metadataURL);
                 maxPredictions = model.getTotalClasses();
                 
-                // Инициализируем веб-камеру
+                // Инициализируем веб-камеру с настройками для live video
                 const flip = true; // Зеркальное отображение для удобства
-                webcam = new tmImage.Webcam(500, 375, flip);
+                webcam = new tmImage.Webcam(640, 480, flip);
                 await webcam.setup();
                 await webcam.play();
                 
                 // Добавляем видео в контейнер
                 document.getElementById("webcam-container").appendChild(webcam.canvas);
+                
+                // Активируем индикатор камеры
+                document.getElementById("cameraIndicator").classList.add("active");
+                
+                // Запускаем непрерывное обновление видео
+                startVideoStream();
                 
                 // Обновляем статус
                 updateStatus("Модель загружена! Нажмите 'Начать игру'", "ready");
@@ -370,6 +517,19 @@
                 console.error("Ошибка загрузки модели:", error);
                 updateStatus("Ошибка загрузки модели. Проверьте подключение к интернету.", "waiting");
             }
+        }
+        
+        // Непрерывная потоковая передача видео
+        function startVideoStream() {
+            function render() {
+                if (webcam && webcam.canvas) {
+                    // Обновляем кадр с камеры
+                    webcam.update();
+                }
+                // Продолжаем цикл анимации
+                animationFrameId = requestAnimationFrame(render);
+            }
+            render();
         }
         
         // Инициализация отображения предсказаний
@@ -394,7 +554,8 @@
             
             gameActive = true;
             document.getElementById("startBtn").disabled = true;
-            updateStatus("Игра началась! Показывайте жесты", "ready");
+            document.getElementById("gestureFrame").classList.add("active");
+            updateStatus("Игра началась! Показывайте жесты в камеру", "ready");
             
             // Запускаем цикл игры
             startGameLoop();
@@ -428,16 +589,26 @@
         
         // Обновление таймера
         function updateTimer(seconds) {
-            document.getElementById("timer").textContent = 
-                `Следующий раунд через: ${seconds} сек`;
+            const timerElement = document.getElementById("timer");
+            timerElement.textContent = `Следующий раунд через: ${seconds} сек`;
+            
+            if (seconds <= 1) {
+                timerElement.classList.add("urgent");
+            } else {
+                timerElement.classList.remove("urgent");
+            }
         }
         
         // Проигрывание раунда
         async function playRound() {
-            updateStatus("Распознаю жест...", "ready");
+            updateStatus("📸 Распознаю жест...", "ready");
+            
+            // Показываем индикатор распознавания
+            const badge = document.getElementById("recognitionBadge");
+            badge.classList.add("active");
             
             try {
-                // Обновляем кадр с камеры
+                // Обновляем кадр с камеры (последний кадр из потока)
                 webcam.update();
                 
                 // Получаем предсказание
@@ -479,9 +650,15 @@
                 // Обновляем счёт
                 updateScores(result);
                 
+                // Скрываем индикатор распознавания через 1 секунду
+                setTimeout(() => {
+                    badge.classList.remove("active");
+                }, 1000);
+                
             } catch (error) {
                 console.error("Ошибка распознавания:", error);
                 updateStatus("Ошибка распознавания. Попробуйте снова.", "waiting");
+                badge.classList.remove("active");
             }
         }
         
@@ -548,7 +725,7 @@
                     messageElement.classList.add("draw");
                     break;
                 case "no-gesture":
-                    messageElement.textContent = "⚠️ Жест не распознан";
+                    messageElement.textContent = "⚠️ Жест не распознан. Покажите четче!";
                     messageElement.classList.add("draw");
                     break;
             }
@@ -578,7 +755,6 @@
         function resetGame() {
             gameActive = false;
             clearInterval(countdownInterval);
-            clearInterval(predictionInterval);
             
             scores = { player: 0, computer: 0, draw: 0 };
             
@@ -595,6 +771,10 @@
             document.getElementById("resultMessage").className = "result-message";
             
             document.getElementById("timer").textContent = "Следующий раунд через: 3 сек";
+            document.getElementById("timer").classList.remove("urgent");
+            
+            document.getElementById("gestureFrame").classList.remove("active");
+            document.getElementById("recognitionBadge").classList.remove("active");
             
             updateStatus("Нажмите 'Начать игру'", "waiting");
             document.getElementById("startBtn").disabled = false;
@@ -606,6 +786,16 @@
             statusElement.textContent = message;
             statusElement.className = `status ${type}`;
         }
+        
+        // Остановка видео потока при закрытии страницы
+        window.addEventListener("beforeunload", () => {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            if (webcam) {
+                webcam.stop();
+            }
+        });
         
         // Запуск при загрузке страницы
         window.addEventListener("load", loadModel);
